@@ -1,6 +1,6 @@
 use std::error::Error;
-use std::fs;
-use std::path::PathBuf;
+use std::{fs, io};
+use std::path::{Path, PathBuf};
 use directories::BaseDirs;
 use glob::glob;
 use serde::{Deserialize, Serialize};
@@ -12,25 +12,52 @@ struct Version {
     hash: String,
 }
 
+fn find_subdirectory(parent_dir: &Path) -> io::Result<Option<PathBuf>> {
+    for entry in fs::read_dir(parent_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
 fn to_chinese() -> Result<(), Box<dyn Error>> {
     // 系统appdata路径
     let base_dirs = BaseDirs::new().ok_or("无法获取基本目录")?;
     let appdata_path = base_dirs.data_dir();
 
-    let notion_asset_dir_path = appdata_path.join("Notion").join("notionAssetCache-v2");
-    let notion_version_file_path = notion_asset_dir_path.join("latestVersion.json");
-
-    if !notion_asset_dir_path.exists() || !notion_version_file_path.exists() {
+    let notion_dir = appdata_path.join("Notion");
+    if !notion_dir.exists() || !notion_dir.exists() {
         return Err("Notion没有安装或当前版本不支持".into());
     }
 
-    // 获取版本文件
-    let notion_version_text = fs::read(notion_version_file_path)?;
-    let notion_version_data: Version = serde_json::from_slice(&notion_version_text)?;
-    info!("Notion版本: {}", notion_version_data.version);
+    let notion_asset_dir_path = notion_dir.join("notionAssetCache-v2");
+    if !notion_asset_dir_path.exists() {
+        return Err("没有找到Notion资源缓存文件夹：notionAssetCache-v2".into());
+    }
+
+    // 获取版本信息
+    let version_text: String;
+    let notion_version_file_path = notion_asset_dir_path.join("latestVersion.json");
+    if notion_version_file_path.exists() {
+        let notion_version_text = fs::read(notion_version_file_path)?;
+        let notion_version_data: Version = serde_json::from_slice(&notion_version_text)?;
+        version_text = notion_version_data.version;
+    } else {
+        match find_subdirectory(notion_asset_dir_path.as_path())? {
+            Some(path) => {
+                version_text = path.file_name().unwrap().to_str().unwrap().to_string();
+            }
+            None => return Err("Notion资源缓存文件夹 notionAssetCache-v2 下是空的".into()),
+        }
+    }
+
+    info!("Notion版本: {}", version_text);
 
     // notion版本下面的实际资源路径
-    let notion_asset_dir_path = notion_asset_dir_path.join(notion_version_data.version).join("assets").join("_assets");
+    let notion_asset_dir_path = notion_asset_dir_path.join(version_text).join("assets").join("_assets");
 
     // 查找 localeSetup-zh-CN-*.js 文件名字
     let notion_js_pattern = notion_asset_dir_path.join("localeSetup-zh-CN-*.js");
@@ -79,7 +106,7 @@ fn main() {
         return;
     }
 
-    info!("notion 汉化成功，请按Ctrl+R刷新或重启");
+    info!("notion 汉化成功，请按Ctrl+R刷新或重启, 按Enter退出");
     let mut temp = String::new();
     std::io::stdin().read_line(&mut temp).unwrap();
 }
